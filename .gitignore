@@ -16,3 +16,6 @@ build/
 # Local development settings
 .env
 .venv
+
+# Jupyter Notebook Checkpoints
+.ipynb_checkpoints/
