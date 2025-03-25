@@ -19,3 +19,6 @@ build/
 
 # Jupyter Notebook Checkpoints
 .ipynb_checkpoints/
+
+# Mac
+.DS_Store
