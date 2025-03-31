@@ -22,3 +22,8 @@ build/
 
 # Mac
 .DS_Store
+
+# Data and Outputs
+WLASL_DATA/
+WLASL_Processed/
+MP_DATA/
