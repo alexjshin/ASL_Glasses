@@ -25,5 +25,8 @@ build/
 
 # Data and Outputs
 WLASL_DATA/
-WLASL_Processed/
+WLASL_Processed_1/
 MP_DATA/
+MP_Data_01/
+Logs/
+
