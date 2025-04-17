@@ -5,7 +5,7 @@ from keypoint_detection import (
     process_mp_frames,
     draw_landmarks,
     extract_keypoints_comprehensive)
-from preprocess_data import preprocess_data
+from preprocess_data import preprocess_data, extract_hand_landmarks, extract_hand_pose_landmarks
 from tensorflow.keras.models import load_model
 
 mp_holistic = mp.solutions.holistic
@@ -18,8 +18,8 @@ print("testing model")
 X_train, X_test, y_train, y_test, actions = preprocess_data('MP_Data_01', sequence_length=30)
 
 ######### LOAD MODEL AND TEST REALTIME #########
-model = load_model('Models/02_lstm_model.h5')
-model.load_weights('Models/02_model.weights.h5')
+model = load_model('Models/02_hand_pose_lstm_model.h5')
+model.load_weights('Models/02_hand_pose_model.weights.h5')
 print("Model loaded successfully")
 
 colors = [
@@ -62,6 +62,7 @@ with mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=
         
         # 2. Prediction logic
         keypoints = extract_keypoints_comprehensive(results)
+        keypoints = extract_hand_pose_landmarks(keypoints) # If Hand Landmarks only
         sequence.append(keypoints)
         sequence = sequence[-30:]
         
