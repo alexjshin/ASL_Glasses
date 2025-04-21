@@ -3,6 +3,22 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from tensorflow.keras.utils import to_categorical
 
+def get_actions(data_path):
+    """
+    Get all action classes from the dataset directory.
+    
+    Args:
+        data_path: Path to the dataset directory
+        
+    Returns:
+        actions: List of action classes
+    """
+    DATA_PATH = os.path.join(data_path)
+    # Automatically detect action classes from directory structure
+    actions = np.array([folder for folder in os.listdir(DATA_PATH) if not folder.startswith('.DS_Store')]) # .DS_Store is issue
+    # print(f"Detected actions: {actions}")
+    return actions
+
 def extract_hand_landmarks(landmarks_data, hand_only=True):
     """
     Extract only hand landmarks from the full MediaPipe data.

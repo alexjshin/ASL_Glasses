@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Text,
   View,
@@ -6,7 +6,11 @@ import {
   TouchableOpacity,
   StyleSheet,
   Clipboard,
+  FlatList,
 } from "react-native";
+import { io } from "socket.io-client";
+import * as BleManager from "react-native-ble-manager";
+import { NativeEventEmitter, NativeModules } from "react-native";
 
 // Harcoded URL for the server
 const SERVER_URL = "http://172.27.230.40:8000";
@@ -16,6 +20,71 @@ export default function Index() {
   const [isConnected, setIsConnected] = useState(false);
   const [isTranslating, setIsTranslating] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
+
+  // New States for translation
+  const [currentTranslation, setCurrentTranslation] = useState("");
+  const [translationHistory, setTranslationHistory] = useState([]);
+  const [socket, setSocket] = useState(null);
+
+  // Initialize WebSocket connection
+  useEffect(() => {
+    // Create socket instance
+    const newSocket = io(SERVER_URL);
+
+    // Socket event handlers
+    newSocket.on("connect", () => {
+      console.log("WebSocket connected");
+      setStatusMessage((prev) => prev + "\nWebSocket connected");
+    });
+
+    newSocket.on("disconnect", () => {
+      console.log("WebSocket disconnected");
+      setStatusMessage((prev) => prev + "\nWebSocket disconnected");
+    });
+
+    newSocket.on("translation_update", (data) => {
+      console.log("Translation received:", data);
+
+      // Update current translation
+      setCurrentTranslation(data.sign);
+
+      // Add to history
+      setTranslationHistory((prev) => {
+        const newHistory = [...prev, data];
+        // Keep only the last 10 translations
+        if (newHistory.length > 10) {
+          return newHistory.slice(newHistory.length - 10);
+        }
+        return newHistory;
+      });
+    });
+
+    newSocket.on("translation_status", (data) => {
+      console.log("Translation status:", data);
+      if (data.status === "connected") {
+        setIsTranslating(true);
+      } else if (data.status === "stopped") {
+        setIsTranslating(false);
+      }
+      setStatusMessage(data.message);
+    });
+
+    newSocket.on("translation_error", (data) => {
+      console.log("Translation error:", data);
+      setStatusMessage(`Error: ${data.message}`);
+      setIsTranslating(false);
+    });
+
+    // Save socket instance
+    setSocket(newSocket);
+
+    // Cleanup on unmount
+    return () => {
+      if (newSocket) {
+        newSocket.disconnect();
+      }
+    };
+  }, []);
 
   const checkServerStatus = async () => {
     setStatusMessage("Checking server connection...");
@@ -55,6 +124,10 @@ export default function Index() {
     }
 
     setStatusMessage("Starting ASL translation...");
+
+    // Clear previous translations
+    setCurrentTranslation("");
+    setTranslationHistory([]);
 
     try {
       const response = await fetch(`${SERVER_URL}/start_translation`, {
@@ -175,6 +248,31 @@ export default function Index() {
         </View>
       </View>
 
+      {/* New Translation Display Section */}
+      {isTranslating && (
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Live Translation</Text>
+          <Text style={styles.currentSign}>
+            {currentTranslation || "Waiting for signs..."}
+          </Text>
+
+          <Text style={styles.historyTitle}>Recent Translations:</Text>
+          <FlatList
+            data={translationHistory.slice().reverse()}
+            keyExtractor={(item, index) => index.toString()}
+            renderItem={({ item }) => (
+              <View style={styles.historyItem}>
+                <Text style={styles.historySign}>{item.sign}</Text>
+                <Text style={styles.historyConfidence}>
+                  {(item.confidence * 100).toFixed(0)}%
+                </Text>
+              </View>
+            )}
+            style={styles.historyList}
+          />
+        </View>
+      )}
+
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Status</Text>
         <Text>{statusMessage}</Text>
@@ -284,5 +382,36 @@ const styles = StyleSheet.create({
   },
   statusGreen: {
     backgroundColor: "green",
+  },
+  // New styles for translation display
+  currentSign: {
+    fontSize: 32,
+    fontWeight: "bold",
+    textAlign: "center",
+    marginVertical: 10,
+    color: "#007bff",
+  },
+  historyTitle: {
+    fontSize: 16,
+    fontWeight: "bold",
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  historyList: {
+    maxHeight: 150,
+  },
+  historyItem: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: "#eee",
+  },
+  historySign: {
+    fontSize: 16,
+  },
+  historyConfidence: {
+    fontSize: 14,
+    color: "#666",
   },
 });
