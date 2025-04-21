@@ -11,7 +11,15 @@ def start_translation():
     """
     Endpoint to start ASL translation using provided stream url
     """
-    pass
+    data = request.get_json()
+    stream_url = data.get('stream_url')
+    print(stream_url)
+
+    return jsonify({
+        'status': 'success',
+        'stream_url': stream_url,
+    })
+    
 
 @app.route('/stop_translation', methods=['POST'])
 def stop_translation():
