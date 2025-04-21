@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_socketio import SocketIO
 import cv2
+import tempfile
 import os
 import time
 import subprocess
@@ -99,21 +100,57 @@ def start_obs_stream_via_websocket(host="localhost", port=4455, password="cpsc49
 def translation_worker():
     global active_translation
     sequence, sentence, predictions = [], [], []
-    cap = cv2.VideoCapture("rtmp://localhost/live/stream")
-
-    if not cap.isOpened():
-        socketio.emit("translation_error", {"message": "OBS stream not available."})
-        active_translation = False
-        return
-
+    
+    # Define ROI coordinates
+    roi_x = 0      
+    roi_y = 38      
+    roi_width = 498  
+    roi_height = 1117 
+    
+    print(f"Using ROI: x={roi_x}, y={roi_y}, width={roi_width}, height={roi_height}")
+    socketio.emit("translation_status", {"status": "running", "message": "Starting screen capture with defined ROI."})
+    
+    def capture_screen_roi():
+        # Create a temporary file
+        temp_file = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+        temp_file.close()
+        
+        # Capture screen to the temporary file
+        subprocess.call(['screencapture', '-x', temp_file.name])
+        
+        # Read the image
+        full_frame = cv2.imread(temp_file.name)
+        
+        # Crop to ROI
+        if full_frame is not None:
+            # Make sure ROI is within the image bounds
+            max_y, max_x = full_frame.shape[:2]
+            if roi_x < max_x and roi_y < max_y:
+                # Ensure we don't go out of bounds
+                end_x = min(roi_x + roi_width, max_x)
+                end_y = min(roi_y + roi_height, max_y)
+                roi_frame = full_frame[roi_y:end_y, roi_x:end_x]
+            else:
+                roi_frame = full_frame  # Fallback to full frame if coordinates are invalid
+        else:
+            roi_frame = None
+        
+        # Clean up
+        os.unlink(temp_file.name)
+        
+        return roi_frame
+    
     with mp.solutions.holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5) as holistic:
-        while active_translation and cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                print("⚠️ No frame. Waiting...")
+        while active_translation:
+            # Capture screen ROI
+            frame = capture_screen_roi()
+            
+            if frame is None or frame.size == 0:
+                print("⚠️ Failed to capture screen ROI. Retrying...")
                 time.sleep(1)
                 continue
-
+            
+            # Process frame with MediaPipe
             image, results = process_mp_frames(frame, holistic)
             draw_landmarks(image, results)
             keypoints = extract_hand_pose_landmarks(extract_keypoints_comprehensive(results))
@@ -135,11 +172,12 @@ def translation_worker():
                             "confidence": prediction['confidence'],
                             "sentence": " ".join(sentence)
                         })
+            
+            # Add a small delay to reduce CPU usage
+            time.sleep(0.1)
 
-    cap.release()
     active_translation = False
     socketio.emit("translation_status", {"status": "stopped", "message": "Translation finished."})
-
 
 def stop_translation_process():
     """
@@ -170,10 +208,10 @@ def start_translation():
 
     active_translation = True
 
-    if not launch_obs():
-        return jsonify({"status": "error", "message": "Failed to launch OBS"}), 500
-    if not start_obs_stream_via_websocket():
-        return jsonify({"status": "error", "message": "Failed to start OBS stream"}), 500
+    # if not launch_obs():
+    #     return jsonify({"status": "error", "message": "Failed to launch OBS"}), 500
+    # if not start_obs_stream_via_websocket():
+    #     return jsonify({"status": "error", "message": "Failed to start OBS stream"}), 500
 
     translation_thread = threading.Thread(target=translation_worker)
     translation_thread.start()
