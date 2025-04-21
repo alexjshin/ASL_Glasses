@@ -5,10 +5,10 @@ import cv2
 import os
 import time
 import subprocess
-import json
 import mediapipe as mp
 import threading
 import numpy as np
+from obswebsocket import obsws, requests
 from tensorflow.keras.models import load_model
 from preprocess_data import (
     get_actions,
@@ -26,8 +26,7 @@ CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Global vairables to track current process
-active_translation = None
-current_stream_url = None
+active_translation = False
 translation_thread = None
 actions = None
 model = None
@@ -47,54 +46,6 @@ def load_asl_model():
 
     print("Model loaded successfully")
     return True
-
-def get_direct_stream_url(instagram_live_url):
-    """
-    Use yt-dlp to get the direct streaming URL from an Instagram livestream
-    """
-    try:
-        # Path to your cookies file - update this to your actual path
-        cookies_file = os.path.join(os.getcwd(), "instagram_cookies.txt")
-        
-        if not os.path.exists(cookies_file):
-            print(f"Cookie file not found at: {cookies_file}")
-            return None
-        
-        # Use yt-dlp with cookies for authentication
-        cmd = [
-            'yt-dlp', 
-            '--cookies', cookies_file,
-            '--verbose',
-            '-f', 'b',  # Use best available format
-            '-g',       # Get direct URL only
-            '--no-check-certificate',  # Skip HTTPS certificate validation if needed
-            '--no-warnings',           # Reduce noise in output
-            instagram_live_url
-        ]
-        
-        print(f"Executing: {' '.join(cmd)}")
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        stdout, stderr = process.communicate()
-        
-        # Check for errors
-        if process.returncode != 0:
-            error_output = stderr.decode('utf-8')
-            print(f"yt-dlp error (code {process.returncode}): {error_output}")
-            return None
-        
-        # Get the direct URL from stdout
-        direct_url = stdout.decode('utf-8').strip()
-        
-        if not direct_url:
-            print("No direct URL found in yt-dlp output")
-            return None
-            
-        print(f"Successfully extracted stream URL")
-        return direct_url
-        
-    except Exception as e:
-        print(f"Error getting direct stream URL: {str(e)}")
-        return None
 
 def make_prediction(sequence, threshold=0.75):
     """
@@ -116,174 +67,79 @@ def make_prediction(sequence, threshold=0.75):
         'prediction_index': np.argmax(res)
     }
 
-def asl_translation_worker(stream_url):
-    """
-    Worker function to handle ASL translation given a stream URL
-    """
-    global active_translation, current_stream_url
-
-    direct_stream_url = get_direct_stream_url(stream_url)
-
-    if not direct_stream_url:
-        print(f"Failed to get direct stream URL for {stream_url}")
-        active_translation = False
-        socketio.emit('translation_error', {'message': f"Failed to access stream: {stream_url}"})
-        return False
-
-    # Intialize Mediapipe
-    mp_holistic = mp.solutions.holistic
-    mp_drawing = mp.solutions.drawing_utils
-    
-    # Colors for visualization (just for development)
-    colors = [
-        (245, 117, 16),  # Orange
-        (117, 245, 16),  # Green
-        (16, 117, 245),  # Blue
-        (255, 0, 0),     # Red
-        (0, 255, 255),   # Cyan
-        (255, 0, 255),   # Magenta
-        (0, 0, 0)        # Black
-    ]
-
-    # Prediction Variables
-    sequence = []
-    sentence = []
-    predictions = []
-    threshold = 0.95
-
-    # Connect to the livestream
+def launch_obs():
     try:
-        cap = cv2.VideoCapture(direct_stream_url)
-        if not cap.isOpened():
-            print(f"Failed to open stream: {stream_url}")
-            active_translation = False
-            socketio.emit('translation_error', {'message': f"Failed to open stream with direct URL: {direct_stream_url}"})
-            return False
+        subprocess.Popen(["open", "-a", "OBS"])
+        print("✅ OBS launched")
+        return True
     except Exception as e:
-        print(f"Error opening stream: {e}")
-        active_translation = False
-        socketio.emit('translation_error', {'message': f"Error opening stream: {str(e)}"})
+        print(f"❌ OBS launch failed: {e}")
         return False
-    
-    print(f"Connect to stream: {stream_url}")
-    socketio.emit('translation_status', {'message': f"Connected to stream: {stream_url}"})
 
-    # Start ASL translation -- review
-    with mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5) as holistic:
-        while active_translation and cap.isOpened():
-            # Read frame from stream
-            ret, frame = cap.read()
-            if not ret:
-                print("Failed to read frame from stream")
-                socketio.emit('translation_warning', {'message': 'Failed to read frame, retrying...'})
-                time.sleep(1)
-                continue
-            
-            # Process frame with MediaPipe
-            image, result = process_mp_frames(frame, holistic)
-
-            # Draw landmarks on the frame
-            draw_landmarks(image, result) 
-
-            # Extract keypoints for prediction
-            keypoints = extract_keypoints_comprehensive(result)
-            keypoints = extract_hand_pose_landmarks(keypoints) # If Hand Landmarks only
-
-            # Add to sequence and keep last 30 frames
-            sequence.append(keypoints)
-            sequence = sequence[-30:]
-            
-            # Make prediction when sequence is complete
-            if len(sequence) == 30:
-                prediction = make_prediction(sequence, threshold)
-                predicted_action = prediction['predicted_action']
-                confidence = prediction['confidence']
-
-                print(f"Predicted Action: {predicted_action}, Confidence: {confidence}")
-                predictions.append(prediction['prediction_index'])
-
-                # Add to sentence if prediction is consistent and above threshold
-                if np.unique(predictions[-10:])[0] == prediction['prediction_index']: # Check if last 10 predictions are the same
-                    if prediction['should_use']:
-                        if len(sentence) > 0:
-                            if predicted_action != sentence[-1]:
-                                sentence.append(predicted_action)
-                                current_sentence = ' '.join(sentence)
-                                print(f"Current sentence: {current_sentence}")
-                                
-                                # Send the translation to all connected clients via WebSocket
-                                translation_data = {
-                                    'sign': predicted_action,
-                                    'confidence': confidence,
-                                    'sentence': current_sentence
-                                }
-                                socketio.emit('translation_update', translation_data)
-                        else:
-                            sentence.append(predicted_action)
-                            current_sentence = predicted_action
-                            print(f"Current sentence: {current_sentence}")
-                            
-                            # Send the translation to all connected clients via WebSocket
-                            translation_data = {
-                                'sign': predicted_action,
-                                'confidence': confidence,
-                                'sentence': current_sentence
-                            }
-                            socketio.emit('translation_update', translation_data)
-                if len(sentence) > 5:
-                    sentence = sentence[-5:]
-            
-            # Add a small delay to reduce CPU usage
-            time.sleep(0.01)
-    # Clean Up
-    cap.release()
-    active_translation = False
-    current_stream_url = None
-    socketio.emit('translation_status', {'status': 'stopped', 'message': 'ASL translation stopped'})
-    print("ASL translation stopped")
-    return True
-
-def asl_translation_manager(stream_url):
-    """
-    Manager function that sets up and controls ASL Translation in a different thread
-    """
-    global active_translation, current_stream_url, translation_thread
-
-    # If Translation is already active stop it first
-    if active_translation:
-        print("Stopping current ASL translation...")
-        stop_translation_process()
-    
-    # Validate the stream URL
-    if not stream_url or not isinstance(stream_url, str):
-        print("Invalid stream URL provided")
-        return False
-    
+def start_obs_stream_via_websocket(host="localhost", port=4455, password="cpsc490"):
     try:
-        # Set new active stream
-        active_translation = True
-        current_stream_url = stream_url
-        
-        # Start translation in a separate thread
-        translation_thread = threading.Thread(target=asl_translation_worker, args=(stream_url,))
-        translation_thread.daemon = True
-        translation_thread.start()
-        
-        # Verify the thread started successfully
-        if not translation_thread.is_alive():
-            print("Failed to start translation thread")
-            active_translation = False
-            current_stream_url = None
-            return False
+        time.sleep(10)  # Give OBS time to fully launch
+        ws = obsws(host, port, password)
+        ws.connect()
+        print("✅ Connected to OBS WebSocket")
+
+        try:
+            ws.call(requests.StartStreaming())
+            print("🎥 Streaming started")
+        except Exception as e:
+            print(f"Note: {e} - OBS may already be streaming")
             
+        ws.disconnect()
         return True
         
     except Exception as e:
-        print(f"Error starting ASL translation: {e}")
-        active_translation = False
-        current_stream_url = None
+        print(f"❌ WebSocket start failed: {e}")
         return False
-        
+
+def translation_worker():
+    global active_translation
+    sequence, sentence, predictions = [], [], []
+    cap = cv2.VideoCapture("rtmp://localhost/live/stream")
+
+    if not cap.isOpened():
+        socketio.emit("translation_error", {"message": "OBS stream not available."})
+        active_translation = False
+        return
+
+    with mp.solutions.holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5) as holistic:
+        while active_translation and cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                print("⚠️ No frame. Waiting...")
+                time.sleep(1)
+                continue
+
+            image, results = process_mp_frames(frame, holistic)
+            draw_landmarks(image, results)
+            keypoints = extract_hand_pose_landmarks(extract_keypoints_comprehensive(results))
+
+            sequence.append(keypoints)
+            sequence = sequence[-30:]
+
+            if len(sequence) == 30:
+                prediction = make_prediction(sequence, threshold=0.95)
+                predictions.append(prediction['prediction_index'])
+
+                if (np.unique(predictions[-10:])[0] == prediction['prediction_index']
+                    and prediction['should_use']):
+                    if not sentence or prediction['predicted_action'] != sentence[-1]:
+                        sentence.append(prediction['predicted_action'])
+                        sentence = sentence[-5:]
+                        socketio.emit("translation_update", {
+                            "sign": prediction['predicted_action'],
+                            "confidence": prediction['confidence'],
+                            "sentence": " ".join(sentence)
+                        })
+
+    cap.release()
+    active_translation = False
+    socketio.emit("translation_status", {"status": "stopped", "message": "Translation finished."})
+
 
 def stop_translation_process():
     """
@@ -307,33 +163,23 @@ def stop_translation_process():
 
 @app.route('/start_translation', methods=['POST'])
 def start_translation():
-    """
-    Endpoint to start ASL translation using provided stream url
-    """
-    data = request.get_json()
-    stream_url = data.get('stream_url')
-    if not stream_url:
-        return jsonify({
-            'status': 'error',
-            'message': 'Stream URL is required',
-        }), 400
-    else:
-        print(f"Stream URL: {stream_url}")
+    global active_translation, translation_thread
 
-    # Start ASL translation
-    success = asl_translation_manager(stream_url)
+    if active_translation:
+        stop_translation_process()
 
-    if success:
-        return jsonify({
-            'status': 'success',
-            'message': 'ASL translation started successfully',
-            'stream_url': stream_url,
-        }), 200
-    else:
-        return jsonify({
-            'status': 'error',
-            'message': 'Failed to start ASL translation',
-        }), 500
+    active_translation = True
+
+    if not launch_obs():
+        return jsonify({"status": "error", "message": "Failed to launch OBS"}), 500
+    if not start_obs_stream_via_websocket():
+        return jsonify({"status": "error", "message": "Failed to start OBS stream"}), 500
+
+    translation_thread = threading.Thread(target=translation_worker)
+    translation_thread.start()
+
+    return jsonify({"status": "success", "message": "ASL translation started."}), 200
+
     
 
 @app.route('/stop_translation', methods=['POST'])
@@ -363,7 +209,6 @@ def status():
     return jsonify({
         'status': 'success',
         'running': active_translation,
-        'stream_url': current_stream_url,
     })
 
 # WebSocket Events
@@ -377,7 +222,6 @@ def handle_connect():
     socketio.emit('translation_status', {
         'status': 'connected',
         'running': active_translation,
-        'stream_url': current_stream_url
     }, room=request.sid)
 
 @socketio.on('disconnect')
