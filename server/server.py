@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_socketio import SocketIO
 import cv2
+import base64
 import tempfile
 import os
 import time
@@ -152,18 +153,28 @@ def translation_worker():
             
             # Process frame with MediaPipe
             image, results = process_mp_frames(frame, holistic)
-            draw_landmarks(image, results)
+            image_with_landmarks = draw_landmarks(image, results)
+            # Convert the image to base64 for sending over WebSocket
+            _, buffer = cv2.imencode('.jpg', image_with_landmarks)
+            base64_image = base64.b64encode(buffer).decode('utf-8')
+            
+            # Send the landmark visualization to the client
+            socketio.emit("landmark_visualization", {
+                "image": f"data:image/jpeg;base64,{base64_image}"
+            })
+            
             keypoints = extract_hand_pose_landmarks(extract_keypoints_comprehensive(results))
 
             sequence.append(keypoints)
             sequence = sequence[-30:]
 
             if len(sequence) == 30:
-                prediction = make_prediction(sequence, threshold=0.95)
+                prediction = make_prediction(sequence, threshold=0.65)
                 predictions.append(prediction['prediction_index'])
 
-                if (np.unique(predictions[-10:])[0] == prediction['prediction_index']
-                    and prediction['should_use']):
+                if prediction['should_use']:
+                # if (np.unique(predictions[-5:])[0] == prediction['prediction_index']
+                #     and prediction['should_use']):
                     if not sentence or prediction['predicted_action'] != sentence[-1]:
                         sentence.append(prediction['predicted_action'])
                         sentence = sentence[-5:]

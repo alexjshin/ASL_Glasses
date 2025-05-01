@@ -36,6 +36,7 @@ def process_mp_frames(frame, holistic):
     return image, results
 
 def draw_landmarks(image, results):
+    image_with_landmarks = image.copy()
     # Draw face landmarks
     mp_drawing.draw_landmarks(image, 
                               results.face_landmarks, 
@@ -59,6 +60,7 @@ def draw_landmarks(image, results):
                               mp_holistic.HAND_CONNECTIONS,
                               landmark_drawing_spec=mp_drawing_styles.get_default_hand_landmarks_style(), 
                               connection_drawing_spec=mp_drawing_styles.get_default_hand_connections_style())
+    return image_with_landmarks
     
 def extract_keypoints_comprehensive(results):
     # Pose Landmarks have 33 Keypoints

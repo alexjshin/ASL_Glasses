@@ -18,8 +18,8 @@ print("testing model")
 X_train, X_test, y_train, y_test, actions = preprocess_data('MP_Data_01', sequence_length=30)
 
 ######### LOAD MODEL AND TEST REALTIME #########
-model = load_model('Models/02_hand_pose_lstm_model.h5')
-model.load_weights('Models/02_hand_pose_model.weights.h5')
+model = load_model('../Models/02_hand_pose_lstm_model.h5')
+model.load_weights('../Models/02_hand_pose_model.weights.h5')
 print("Model loaded successfully")
 
 colors = [

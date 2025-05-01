@@ -6,13 +6,14 @@ import {
   TouchableOpacity,
   StyleSheet,
   FlatList,
+  Image,
 } from "react-native";
 import { io } from "socket.io-client";
 import * as BleManager from "react-native-ble-manager";
 import { NativeEventEmitter, NativeModules } from "react-native";
 
 // Harcoded URL for the server
-const SERVER_URL = "http://10.74.114.162:8000";
+const SERVER_URL = "http://10.1.10.225:8000";
 
 export default function Index() {
   const [isConnected, setIsConnected] = useState(false);
@@ -23,6 +24,7 @@ export default function Index() {
   const [currentTranslation, setCurrentTranslation] = useState("");
   const [translationHistory, setTranslationHistory] = useState([]);
   const [socket, setSocket] = useState(null);
+  const [landmarkImage, setLandmarkImage] = useState(null);
 
   // Initialize WebSocket connection
   useEffect(() => {
@@ -73,6 +75,11 @@ export default function Index() {
       console.log("Translation error:", data);
       setStatusMessage(`Error: ${data.message}`);
       setIsTranslating(false);
+    });
+
+    newSocket.on("landmark_visualization", (data) => {
+      console.log("Landmark visualization received");
+      setLandmarkImage(data.image);
     });
 
     // Save socket instance
@@ -223,6 +230,21 @@ export default function Index() {
         </View>
       )}
 
+      {/* {isTranslating && (
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Landmark Visualization</Text>
+          {landmarkImage ? (
+            <Image
+              source={{ uri: landmarkImage }}
+              style={styles.landmarkImage}
+              resizeMode="contain"
+            />
+          ) : (
+            <Text>Waiting for visualization...</Text>
+          )}
+        </View>
+      )} */}
+
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Status</Text>
         <Text>{statusMessage}</Text>
@@ -287,4 +309,10 @@ const styles = StyleSheet.create({
   },
   historySign: { fontSize: 16 },
   historyConfidence: { fontSize: 14, color: "#666" },
+  landmarkImage: {
+    width: "100%",
+    height: 200,
+    marginVertical: 10,
+    borderRadius: 8,
+  },
 });
